@@ -99,13 +99,17 @@ function Command.run(args)
 
 		local rbxRequire
 
-		local function loadScript(sc: Roblox.Instance)
-			sc = ReducedInstance.once(sc)
+		local function loadScript(sc: Roblox.Instance, wrapInModuleFunction: boolean?) -- wrapInModuleFunction: to determine the module returns nil or nothing
+			-- sc = ReducedInstance.once(sc)
 			if not sc:IsA("LuaSourceContainer") then
 				error("Attempt to load a non LuaSourceContainer")
 			end
 
-			local bytecodeSuccess, bytecode = pcall(Luau.compile, (sc :: any).Source)
+			local source = (sc :: any).Source
+			if wrapInModuleFunction == true then
+				--source = "return function()\n" .. source .. "\nend"
+			end
+			local bytecodeSuccess, bytecode = pcall(Luau.compile, source)
 			if not bytecodeSuccess then
 				error(bytecode)
 			end
@@ -141,18 +145,24 @@ function Command.run(args)
 
 			local cached = MODULE_REGISTRY[moduleScript]
 			if cached then
-				return cached
+				return cached[1]
 			end
 
-			local func = loadScript(moduleScript)
+			local func = loadScript(moduleScript, true)
 
 			local thread = coroutine.running()
-			Task.spawn(function()
-				local result = func()
-				Task.spawn(thread, result)
-			end)
-			local result = coroutine.yield()
-			MODULE_REGISTRY[moduleScript] = result
+
+			local isSuspended = false
+			isSuspended = coroutine.status(Task.spawn(function()
+				local pack = table.pack(func())
+				if isSuspended then
+					Task.spawn(thread, pack)
+				end
+			end)) ~= "dead"
+			local pack = coroutine.yield() --- reuse moduleFunction as identifier for cache (MODULE_REGISTRY)
+			assert(pack.n == 1, "Module code did not return exactly one value")
+			local result = pack[1]
+			MODULE_REGISTRY[moduleScript] = pack
 			return result
 		end
 
