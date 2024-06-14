@@ -1,3 +1,9 @@
-local LibBloxyLune = require("lib")
+local Process = require("@lune/process")
+local Main = require("src/main")
+local Commands = require("src/commands")
 
-return LibBloxyLune
+if Process.args then
+	Main()
+end
+
+return Commands
