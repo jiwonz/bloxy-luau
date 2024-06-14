@@ -81,19 +81,43 @@ function Command.run(args)
 			end)
 
 			-- DEPENDENTS: [Jest]
+			local renderStepBinds = {}
+			Roblox.implementMethod("RunService", "BindToRenderStep", function(self, name: string, priority : number, func: () -> ())
+				local runtime = Runtime.new(priority)
+				renderStepBinds[name] = runtime:Connect(func)
+			end :: any)
+			Roblox.implementMethod("RunService", "UnbindFromRenderStep", function(self, name: string)
+				renderStepBinds[name]:Disconnect()
+				renderStepBinds[name] = nil
+			end :: any)
+
+			local RenderStepped = Runtime.new(2000)
+			Roblox.implementProperty("RunService", "RenderStepped", function()
+				return RenderStepped
+			end)
+			Roblox.implementProperty("RunService", "PreRender", function()
+				return RenderStepped
+			end)
+
+			local PreAnimation = Runtime.new(2000 + 1)
+			Roblox.implementProperty("RunService", "PreAnimation", function()
+				return PreAnimation
+			end)
+
+			local Stepped = Runtime.new(2000 + 2)
+			Roblox.implementProperty("RunService", "Stepped", function()
+				return Stepped
+			end)
+			Roblox.implementProperty("RunService", "PreSimulation", function()
+				return Stepped
+			end)
+
+			local Heartbeat = Runtime.new(2000 + 3)
 			Roblox.implementProperty("RunService", "Heartbeat", function()
-				return {
-					Wait = function(_self)
-						local thread = coroutine.running()
-						local conn
-						conn = Runtime:Connect(function(dt)
-							conn:Disconnect()
-							coroutine.resume(thread, dt)
-						end)
-						return coroutine.yield()
-					end,
-					Connect = Runtime.Connect,
-				}
+				return Heartbeat
+			end)
+			Roblox.implementProperty("RunService", "PostSimulation", function()
+				return Heartbeat
 			end)
 		end
 
@@ -135,7 +159,6 @@ function Command.run(args)
 				environment = setmetatable({
 					game = game,
 					script = sc,
-					--require = requireModule,
 					tick = os.clock,
 					task = Task,
 					DateTime = DateTime,
@@ -144,6 +167,7 @@ function Command.run(args)
 					workspace = game:GetService("Workspace"),
 					require = rbxRequire,
 					Instance = rbxInstance,
+					DateTime = DT,
 					-- error = rbxError
 					--debug = Debug,
 				}, { __index = function(self, k)
