@@ -2,7 +2,7 @@
 Lune scripts to simulate Roblox luau scripts
 
 # Implemented
-## Every Roblox methods which is implemented by Lune (@lune/roblox)
+## Every Roblox methods which is implemented in Lune (@lune/roblox)
 ## RunService
 ## require
 ## Instance
