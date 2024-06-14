@@ -98,6 +98,22 @@ function Command.run(args)
 		end
 
 		local rbxRequire
+		local rbxInstance = {}
+		rbxInstance.fromExisting = function(instance)
+			local t = typeof(instance)
+			if t == "Instance" then
+				return Roblox.Instance.new(instance.ClassName)
+			else
+				error(`invalid argument #1 to 'fromExisting' (Instance expected, got {t})`)
+			end
+		end :: <T>(T) -> (T)
+		rbxInstance.new = function(className: string, parent: Instance?)
+			local instance = Roblox.Instance.new(className)
+			if parent then
+				instance.Parent = parent
+			end
+			return instance
+		end
 
 		local function loadScript(sc: Roblox.Instance, wrapInModuleFunction: boolean?) -- wrapInModuleFunction: to determine the module returns nil or nothing
 			-- sc = ReducedInstance.once(sc)
@@ -127,6 +143,7 @@ function Command.run(args)
 					warn = rbxWarn,
 					workspace = game:GetService("Workspace"),
 					require = rbxRequire,
+					Instance = rbxInstance,
 					-- error = rbxError
 					--debug = Debug,
 				}, { __index = function(self, k)
