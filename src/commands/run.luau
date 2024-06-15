@@ -230,7 +230,7 @@ function Command.run(args)
 
 		implementRobloxMethods()
 		local func = loadScript(script)
-		Task.spawn(func)
+		func()
 	end)
 end
 
