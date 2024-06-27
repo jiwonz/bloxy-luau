@@ -1,23 +1,20 @@
---// $Packages
+--!strict
+
 local FS = require("@lune/fs")
 local Roblox = require("@lune/roblox")
 local Luau = require("@lune/luau")
 local Task = require("@lune/task")
 local Stdio = require("@lune/stdio")
-local DT = require("../utils/datetime")
-local Runtime = require("../utils/runtime")
-local ReducedInstance = require("../utils/reduced_instance")
+local DT = require("utils/datetime")
+local Runtime = require("utils/runtime")
+local ReducedInstance = require("utils/reduced_instance")
 
---// $CommandConfig
-local Types = require("../types")
-local Command = {} :: Types.Command<{
-    script: string,
-    place: string?
-}>
-Command.description = "Run a script"
+local module = {}
 
-function Command.run(args)
+function module.run(args: {place: string, script: string, addon: { environment: { [string]: any }? , hooks: { onExit: (exitWithError: boolean) -> () }? }? })
+	local rootThread = coroutine.running()
 	Task.spawn(function()
+		local mainScriptThread = coroutine.running()
 		local place = args.place
 		if place then
 			place = FS.readFile(place)
@@ -40,7 +37,7 @@ function Command.run(args)
 			"getReflectionDatabase",
 			"implementProperty",
 			"implementMethod"
-		}
+		} :: { [any]: any }
 		for i, v in lockedRobloxMethod do
 			lockedRobloxMethod[v] = Roblox[v]
 		end
@@ -126,12 +123,12 @@ function Command.run(args)
 		rbxInstance.fromExisting = function(instance)
 			local t = typeof(instance)
 			if t == "Instance" then
-				return Roblox.Instance.new(instance.ClassName)
+				return Roblox.Instance.new((instance :: any).ClassName)
 			else
 				error(`invalid argument #1 to 'fromExisting' (Instance expected, got {t})`)
 			end
 		end :: <T>(T) -> (T)
-		rbxInstance.new = function(className: string, parent: Instance?)
+		rbxInstance.new = function(className: string, parent: Roblox.Instance?)
 			local instance = Roblox.Instance.new(className)
 			if parent then
 				instance.Parent = parent
@@ -139,38 +136,75 @@ function Command.run(args)
 			return instance
 		end
 
-		local function loadScript(sc: Roblox.Instance, wrapInModuleFunction: boolean?) -- wrapInModuleFunction: to determine the module returns nil or nothing
+		local rbxError = function<T>(message: T?, level: number?)
+			local stacks = debug.traceback(nil, level and level + 1 or 2):split("\n")
+			stacks[#stacks] = nil
+			stacks[#stacks] = nil
+			Stdio.write(Stdio.style("bold"))
+			Stdio.write(Stdio.color("red"))
+			if stacks[1] then
+				rbxPrint(stacks[1]..": "..tostring(message))
+			else
+				rbxPrint(message)
+				stacks[1] = tostring(message)
+			end
+			Stdio.write(Stdio.color("reset"))
+			Stdio.write(Stdio.style("reset"))
+
+			Stdio.write(Stdio.color("blue"))
+			print("Stack Begin")
+			for _, v in stacks do
+				local fullname = v:match('"(.-)"')
+				if not fullname then
+					continue
+				end
+				local line = v:gsub(fullname, ""):match("%]:(%d+)")
+				print(`Script '{fullname}', Line {line}`)
+			end
+			print("Stack End")
+			Stdio.write(Stdio.color("reset"))
+			if coroutine.running() == mainScriptThread then
+				print("omfg main script thread is dead by error!")
+				coroutine.resume(rootThread, true)
+			end
+			coroutine.yield()
+		end
+
+		local function loadScript(sc: Roblox.Instance) -- wrapInModuleFunction: to determine the module returns nil or nothing
 			-- sc = ReducedInstance.once(sc)
 			if not sc:IsA("LuaSourceContainer") then
 				error("Attempt to load a non LuaSourceContainer")
 			end
 
 			local source = (sc :: any).Source
-			if wrapInModuleFunction == true then
-				--source = "return function()\n" .. source .. "\nend"
-			end
 			local bytecodeSuccess, bytecode = pcall(Luau.compile, source)
 			if not bytecodeSuccess then
 				error(bytecode)
 			end
 
+			local scriptEnv = {
+				game = game,
+				script = sc,
+				tick = os.clock,
+				task = Task,
+				DateTime = DT,
+				print = rbxPrint,
+				warn = rbxWarn,
+				workspace = game:GetService("Workspace"),
+				require = rbxRequire,
+				Instance = rbxInstance,
+				error = rbxError
+				--debug = Debug,
+			}
+			if args.addon and args.addon.environment then
+				for k, v in args.addon.environment do
+					scriptEnv[k] = v
+				end
+			end
+
 			local callableFn = Luau.load(bytecode, {
 				debugName = sc:GetFullName(),
-				environment = setmetatable({
-					game = game,
-					script = sc,
-					tick = os.clock,
-					task = Task,
-					DateTime = DateTime,
-					print = rbxPrint,
-					warn = rbxWarn,
-					workspace = game:GetService("Workspace"),
-					require = rbxRequire,
-					Instance = rbxInstance,
-					DateTime = DT,
-					-- error = rbxError
-					--debug = Debug,
-				}, { __index = function(self, k)
+				environment = setmetatable(scriptEnv, { __index = function(self, k)
 					local method = Roblox[k]
 					if lockedRobloxMethod[k] == method then
 						return nil
@@ -178,7 +212,17 @@ function Command.run(args)
 					return method
 				end}) :: any,
 			})
-			return callableFn
+			return function()
+				local result = table.pack(pcall(callableFn))
+				if not result[1] then
+					rbxError(result[2])
+				end
+				local out = {}
+				for i = 2, result.n do
+					table.insert(out, result[i])
+				end
+				return table.unpack(out)
+			end
 		end
 
 		rbxRequire = function(moduleScript: Roblox.Instance)
@@ -189,54 +233,36 @@ function Command.run(args)
 				return cached[1]
 			end
 
-			local func = loadScript(moduleScript, true)
+			local func = loadScript(moduleScript)
 
 			local thread = coroutine.running()
 
 			local isSuspended = false
+			local pack
 			isSuspended = coroutine.status(Task.spawn(function()
-				local pack = table.pack(func())
+				pack = table.pack(func())
 				if isSuspended then
-					Task.spawn(thread, pack)
+					Task.spawn(thread)
 				end
 			end)) ~= "dead"
-			local pack = coroutine.yield() --- reuse moduleFunction as identifier for cache (MODULE_REGISTRY)
+			if isSuspended then
+				coroutine.yield() --- reuse moduleFunction as identifier for cache (MODULE_REGISTRY)
+			end
 			assert(pack.n == 1, "Module code did not return exactly one value")
 			local result = pack[1]
 			MODULE_REGISTRY[moduleScript] = pack
 			return result
 		end
 
-		-- local rbxError = function<T>(message: T, level: number?)
-		-- 	local stacks = debug.traceback():split("\n")
-		-- 	stacks[#stacks] = nil
-		-- 	Stdio.write(Stdio.style("bold"))
-		-- 	Stdio.write(Stdio.color("red"))
-		-- 	rbxPrint(message)
-		-- 	Stdio.write(Stdio.color("reset"))
-		-- 	Stdio.write(Stdio.style("reset"))
-
-		-- 	Stdio.write(Stdio.color("blue"))
-		-- 	print("Stack Begin")
-		-- 	for i, v in stacks do
-		-- 		local splited = v:split(":")
-		-- 		local line = splited[#splited]
-		-- 		local fullname = v:match('"(.-)"')
-		-- 		print(`Script '{fullname}', Line {line}`)
-		-- 	end
-		-- 	print("Stack End")
-		-- 	Stdio.write(Stdio.color("reset"))
-		-- end
-
 		implementRobloxMethods()
 		local func = loadScript(script)
 		func()
+		coroutine.resume(rootThread, false)
 	end)
+	local exitWithError = coroutine.yield()
+	if args.addon and args.addon.hooks then
+		args.addon.hooks.onExit(exitWithError)
+	end
 end
 
-function Command.args(parser)
-	parser:argument("script", "Script to run")
-    parser:option("--place", "Place file")
-end
-
-return Command
+return module
