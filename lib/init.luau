@@ -11,7 +11,16 @@ local ReducedInstance = require("utils/reduced_instance")
 
 local module = {}
 
-function module.run(args: {place: string, script: string, addon: { environment: { [string]: any }? , hooks: { onExit: (exitWithError: boolean) -> () }? }? })
+function module.run(args: {
+	place: string,
+	script: string,
+	addon: {
+		environment: { [string]: any }?,
+		hooks: { onExit: (exitWithError: boolean) -> () }?
+	}?,
+	localplayer: string? | number?,
+	localplayername: string?
+})
 	local rootThread = coroutine.running()
 	Task.spawn(function()
 		local mainScriptThread = coroutine.running()
@@ -20,6 +29,18 @@ function module.run(args: {place: string, script: string, addon: { environment: 
 			place = FS.readFile(place)
 		else
 			place = Roblox.serializePlace(Roblox.Instance.new("DataModel"))
+		end
+		if args.localplayer or args.localplayername then
+			local localPlayer = Roblox.Instance.new("Player")
+			if args.localplayername and type(args.localplayername) == "string" then
+				localPlayer.Name = args.localplayername
+			elseif args.localplayer then
+				if type(args.localplayer) == "number" then
+					localPlayer.Name = args.localplayer
+				elseif type(args.localplayer) == "string" then
+					localPlayer.Name = args.localplayer
+				end
+			end
 		end
 		local game = Roblox.deserializePlace(place)
 		local script = Roblox.Instance.new("Script")
